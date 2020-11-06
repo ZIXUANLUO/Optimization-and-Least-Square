@@ -1,0 +1,203 @@
+---
+title: "Optimization and Least Square"
+author: 'Zixuan Luo'
+date: "11/7/2019"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(stargazer)
+library(margins)
+library(knitr)
+```
+
+#### Generate the data
+```{r}
+rm(list=ls())
+set.seed(1412)
+n <- 500
+error <- rnorm(n, 0, 2)
+x1 <- runif(n)
+x2 <- runif(n)
+x3 <- runif(n)
+y <- 3 + 4 * x1 + 5 * x2 + 6 * x3 + error
+y.star <- rep(0, n)
+y.star[y > 12] <- 1
+```
+
+#### 1. Estimate the Probit model $y^*=F(X\beta)+v$ and derive the marginal effects for $x_1,x_2$, and $x_3$.
+
+```{r}
+mdat<- data.frame(y.star=y.star, x1=x1, x2=x2, x3=x3)
+reg_probit<-glm(y.star~x1+x2+x3,data=mdat,
+                family = binomial(link="probit")) # if change the link to logit, it will run logit regression. 
+stargazer(reg_probit,type="text")
+```
+
+```{r}
+reg_margins = margins(reg_probit)
+summary(reg_margins)
+plot(reg_margins)
+```
+
+#### 2. Estimate the linear probability model $y^*=X\beta+e$ and derive the marginal effects for $x_1,x_2$, and $x_3$.
+
+```{r}
+glm_probit<-glm(y.star~x1+x2+x3,data=mdat, family="binomial")
+stargazer(glm_probit,type="text")
+```
+
+```{r}
+glm_margins = margins(glm_probit)
+summary(glm_margins)
+plot(glm_margins)
+```
+
+
+#### 3. Compare the parameter and marginal effects.
+
+The estimated parameters and marginal effects for Probit model and linear probability model are shown in following table:
+
+|                    |      x1      |      x2      |      x3      |    constant   |
+|:------------------:|:------------:|:------------:|:------------:|:-------------:|
+|       Probit       | 2.083(0.270) | 2.518(0.290) | 3.029(0.312) | -4.518(0.363) |
+| Linear Probability | 3.548(0.489) | 4.427(0.532) | 5.217(0.577) | -7.822(0.699) |
+
+We can see the probit model will give better marginal effects.
+
+#### 4. Estimate the Probit model using your own numerical optimization code adepted from class
+
+In class, we studied using optimization to solve a 2-variable Probit model. However, in this problem, we have 3 variables ($x_1,x_2,x_3$). Then I modified the code to fit this new problem. Basically, it will update the coefficients iteratively until the model is converge or the number of iteration limitation is reached. 
+
+I organize the numerical optimization algorithm into a function that returns the residual error $x_1$'s parameter estimation for the convinient of problem 5.
+
+```{r}
+my.probit = function(x1,x2,x3,y,verbos=FALSE) {
+  x<-cbind(1,x1,x2,x3)
+  bhat.ls<-solve(t(x)%*%x)%*%t(x)%*%y
+  fun.ls<-function(bhat){  #sum of least square
+    sum((y-x%*%bhat)^2)
+  }
+  b.start<-c(0,0,0,0) # this is a 3 dimensional space, because you have 3 betas
+  b1<-b.start+c(0.01,0,0,0)#adding a little number in the first dimension
+  b2<-b.start+c(0,0.01,0,0)#adding a little number in the second dimension
+  b3<-b.start+c(0,0,0.01,0)#adding a little number in the third dimension
+  b4<-b.start+c(0,0,0,0.01)#adding a little number in the forth dimension
+  
+  der.1<-fun.ls(b1)-fun.ls(b.start)
+  der.2<-fun.ls(b2)-fun.ls(b.start)
+  der.3<-fun.ls(b3)-fun.ls(b.start)
+  der.4<-fun.ls(b4)-fun.ls(b.start)
+  
+  converge<-0
+  funt.eval<-10000000
+  iter.limit<-1000
+  b.start<-c(0,0,0,0)
+  b.err = c(0,0,0,0)
+  ss<-0.01 #step size, reduce the step size, the result got much better
+  iter<-0 #where iteration starts, it starts at 0 and meet iter.limit
+  b.iter<-matrix(0,iter.limit+1,4)
+  f.iter<-rep(0,iter.limit+1)
+  tol<-0.1 # Tolerance is important in optimizer
+  der.vs.2<-matrix(0,4,4) #have 3 by 3 matrix second derivatives.
+  while(converge<1){
+    der.1<-(fun.ls(b.start+c(ss,0,0,0))-fun.ls(b.start))/ss 
+    #evaluating at the first dimension
+    der.2<-(fun.ls(b.start+c(0,ss,0,0))-fun.ls(b.start))/ss 
+    #second dimension
+    der.3<-(fun.ls(b.start+c(0,0,ss,0))-fun.ls(b.start))/ss 
+    #third dimension
+    der.4<-(fun.ls(b.start+c(0,0,0,ss))-fun.ls(b.start))/ss 
+    #forth dimension
+    
+    if (der.1<0) {d1<-2} else {d1<-1} 
+    #if der.1 is negative, to the power of d1=2, it's positive; if der.1 is negative, to the power of d1=1, it's negative; by doing this, we know the direction whether it's going to the positive or negative direction on the graph. 
+    if (der.2<0) {d2<-2} else {d2<-1}
+    if (der.3<0) {d3<-2} else {d3<-1}
+    if (der.4<0) {d4<-2} else {d4<-1}
+    k<-4
+    der.vs.1<-c(der.1,der.2,der.3,der.4) #put all first derivatives into same dimension.
+    for (j in 1:k){ 
+      for (jj in 1:k){
+        b1<-b.start
+        # following at looking at the derivative at one direction
+        b1[j]<-b1[j]+ss
+        b1[jj]<-b1[jj]+ss
+        f1<-fun.ls(b1)
+        
+        b2<-b.start
+        #this is looking at the derivative at the other direction,
+        b2[j]<-b2[j]+ss
+        b2[jj]<-b2[jj]-ss
+        f2<-fun.ls(b2)
+        
+        b3<-b.start
+        # it is looking at both negative direction
+        b3[j]<-b3[j]-ss
+        b3[jj]<-b3[jj]+ss
+        f3<-fun.ls(b3)
+        
+        b4<-b.start
+        b4[j]<-b4[j]-ss
+        b4[jj]<-b4[jj]-ss
+        f4<-fun.ls(b4)
+        der.vs.2[j,jj]<-(f1-f2-f3+f4)/(4*ss^2)
+        # this tells us the second derivatives,
+      }}
+    step.vs<-as.vector(-solve(der.vs.2)%*%der.vs.1)
+    # thers is a negative sign, this is also picked up along the hecksion along the diagnol. "solve" is taking the inverse of the second derivatives
+    b.start.new<-b.start+step.vs
+    iter<-iter+1
+    f.iter[iter]<-fun.ls(b.start.new) #f.iter.new is a vactor
+    b.iter[iter,]<-b.start.new #b.iter.new is a matrix (b1, b2, b3)
+    b.err = abs(b.iter[iter,] - b.iter[iter-1,]) / abs(b.iter[iter-1,])
+    if (abs(fun.ls(b.start.new)-fun.ls(b.start))<tol)
+      converge<-1
+    if (iter>iter.limit)
+      converge<-1
+    b.start<-b.start.new
+  }
+  err = (b.iter[iter,] - bhat.ls) / bhat.ls
+  if (verbos) {
+    print(bhat.ls)
+    print(t(b.iter[iter,]))
+    print(err)
+  }
+  return(err[2])
+}
+
+ex1 = my.probit(x1,x2,x3,y.star,verbos=TRUE)
+print(ex1)
+```
+
+By comparing the bhat.ls and b.iter, we can see these estimates is very close.
+
+#### 5. Roughly how much less data(n<500) do you need to estimate the parameter of $x_1$ assuming you could observe the latent variable $y$ versus having to use observed varaibale $y^*$.
+
+```{r}
+ccn = c()
+for (n in 20:500) {
+  res = 0
+  for (t in 1:20) {
+    error <- rnorm(n, 0, 2)
+    x1 <- runif(n)
+    x2 <- runif(n)
+    x3 <- runif(n)
+    y <- 3 + 4 * x1 + 5 * x2 + 6 * x3 + error
+    res = res + my.probit(x1,x2,x3,y)
+  }
+  ccn = c(ccn, res/20)
+}
+```
+
+```{r}
+n = c(20:500)
+plot(n,ccn,xlab="n", type="b", pch=19, col="red",ylab="error")
+legend(1, 95, legend=c("estimate from y", "estimate from y.star"),
+       col=c("red", "blue"), lty=1:2, cex=0.8)
+```
+
+In this figure, the red straight line indicates the error from $y^*$. We can see we can use 20 times less data (around 20 to 30) to estimate the parameter of $x_1$.
